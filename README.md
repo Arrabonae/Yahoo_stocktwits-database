@@ -5,4 +5,4 @@ This script uses SQlite database to store data from Stocktwits and Yahoo in rela
 Once the script initiated, runs every 4 minutes till a manual break. 
 
 Terminal should give the following results
-![Terminal Results](pictures/Screenshot 2020-07-02 at 4.46.14 PM.png)
+![Terminal Results](pictures/terminal.png)
