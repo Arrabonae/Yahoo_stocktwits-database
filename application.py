@@ -3,27 +3,53 @@ import json
 import pandas as pd
 import numpy as np
 import time
-from flask import Flask, request, jsonify, render_template, redirect
+from datetime import date, timedelta
 import os
+from pandas_datareader import data as pdr
+import yfinance as yf
+yf.pdr_override()
+import sqlite3
 
-#Create the Flask API
-application = Flask(__name__)
+
 #root = '/Users/graystone/Documents/Github/Andromeda/test/production/data.csv'
-root = os.path.join(os.getcwd(), 'data')
-@application.route('/')
+root = os.path.join(os.getcwd(), 'collector/data')
+
+def Create():
+    connect = sqlite3.connect('sentiment_yahoo.db')
+    c = connect.cursor()
+    c.execute(""" CREATE TABLE IF NOT EXISTS twits( 
+                message_id integer,
+                message text,
+                sentiment text,
+                time text,
+                stock_code text, UNIQUE(message_id)
+                )""")
+    c.execute(""" CREATE TABLE IF NOT EXISTS yahoo_data( 
+            Datetime text,
+            Open integer,
+            High integer,
+            Low integer,
+            Close integer,
+            Adj_Close integer, 
+            Volume integer,
+            Stock text,
+            ID text, UNIQUE(ID)
+            )""")
+    return
+
 
 def StockTwits(stocks):
     for stock in stocks:
         r = requests.get('https://api.stocktwits.com/api/2/streams/symbol/ric/{}.json' .format(stock))
         rj =r.json()
-
+        print (r)
         #if not rj['response']['status']==200:
         #    print ('API is overloaded and gave back to following error code: {}. Now the request has stoped for 1 hour' .format(rj['response']['status']))
         #    time.sleep(3600)
         #    r = requests.get('https://api.stocktwits.com/api/2/streams/symbol/ric/{}.json' .format(stock))
         #    rj =r.json()
         #else:
-        list = []
+        #list = []
 
         for i in range(0,len(rj['messages'])):
             message_ID = rj['messages'][i]['id']
@@ -32,26 +58,70 @@ def StockTwits(stocks):
             else: sentiment = rj['messages'][i]['entities']['sentiment'].get('basic')
             time = rj['messages'][i]['created_at']
             stock_code = rj['symbol']['symbol']
-            list.append([message_ID, message, sentiment, time, stock_code])
-
-        df = pd.DataFrame(list, columns=['Message_ID','Message','Sentiment', 'Time', 'Stock'])
-        df.set_index('Time', inplace=True)
-        df.to_csv(root, mode='a+',header=False) #,header=False
+            #list.append([message_ID, message, sentiment, time, stock_code])
+            connect = sqlite3.connect('sentiment_yahoo.db')
+            c = connect.cursor()
+            c.execute("INSERT OR IGNORE INTO twits VALUES (:message_id, :message, :sentiment, :time, :stock_code)",
+                { 
+                'message_id' : message_ID,
+                'message'  : message,
+                'sentiment': sentiment,
+                'time': time,
+                'stock_code': stock_code,})
+            connect.commit()
+            connect.close()
+        #df = pd.DataFrame(list, columns=['Message_ID','Message','Sentiment', 'Time', 'Stock'])
+        #df.set_index('Time', inplace=True)
+        #df.to_csv(root + "/data.csv", mode='a+',header=False) #,header=False
     return  
+
+def yahoo_data(stocks):
+    
+    for tick in stocks:
+        target = yf.Ticker(tick)
+        d = date.today() - timedelta(days=1)
+        d2 = date.today()
+        OCHL = pdr.get_data_yahoo(tick, start=d.strftime('%Y-%m-%d'), end=d2.strftime('%Y-%m-%d'), interval="1m")
+        OCHL['Stock'] = tick
+        OCHL.reset_index(inplace=True)
+        OCHL['ID'] = OCHL['Stock'] +" "+ OCHL['Datetime'].astype(str)
+        OCHL.rename(columns={'Adj Close': 'Adj_Close'}, inplace=True)
+        OCHL.set_index('ID', inplace=True)
+        #df.set_index('Datetime', inplace=True)
+        #df['Stock'] = tick
+        #df.to_csv(root +"/yahoo.csv", mode='a+', header=False) #,header=False
+        connect = sqlite3.connect('sentiment_yahoo.db')
+        OCHL.to_sql('TempTable',if_exists='replace', con=connect)
+        cur = connect.cursor()
+        cur.execute("INSERT OR IGNORE INTO yahoo_data SELECT * FROM TempTable")
+        connect.commit()
+        connect.close()
 
 
 stocks = ['AAPL', 'MSFT', 'V', 'INTC', 'MA', 'NVDA', 'CSCO', 'ADBE', 'PYPL', 'CRM']
+run = 0
 
 while True:
-    run = 0
+    Create()    
     StockTwits(stocks)
+    yahoo_data(stocks)
     run += 1
-    df = pd.read_csv(root).drop_duplicates()
-    df.set_index('Time', inplace=True)
-    df.to_csv(root)
-    count = len(df.index)
-    print('This code ran {} times and the dataset currently has {} lines of Tweets.' .format(run,count))
-    time.sleep(180)
+    #df = pd.read_csv(root+ "/data.csv").drop_duplicates()
+    #df2 = pd.read_csv(root+"/yahoo.csv").drop_duplicates()
+    #df.set_index('Time', inplace=True)
+    #df2.set_index('Datetime', inplace=True)
+    #df.to_csv(root+ "/data.csv")
+    #df2.to_csv(root+ "/yahoo.csv")
+    connect = sqlite3.connect('sentiment_yahoo.db')
+
+    # Load the data into a DataFrame
+    twits = pd.read_sql_query("SELECT * from twits", connect)
+    yahoo = pd.read_sql_query("SELECT * from yahoo_data", connect)
+    connect.close()
+    count = len(twits.index)
+    count2 = len(yahoo.index)
+    print('This code ran {} times and the dataset currently has {} lines of Tweets, {} lines of OCHL data' .format(run,count, count2) )
+    time.sleep(240)
 
 if __name__ == "__main__":
-    application.run(host='0.0.0.0', debug=False)
+    application()
