@@ -9,14 +9,22 @@ from pandas_datareader import data as pdr
 import yfinance as yf
 yf.pdr_override()
 import sqlite3
+from flask import Flask
+import pymysql
 
+db_user = os.environ.get('CLOUD_SQL_USERNAME')
+db_password = os.environ.get('CLOUD_SQL_PASSWORD')
+db_name = os.environ.get('CLOUD_SQL_DATABASE_NAME')
+db_connection_name = os.environ.get('CLOUD_SQL_CONNECTION_NAME')
 
-#root = '/Users/graystone/Documents/Github/Andromeda/test/production/data.csv'
-root = os.path.join(os.getcwd(), 'collector/data')
+app = Flask(__name__)
 
 def Create():
-    connect = sqlite3.connect('sentiment_yahoo.db')
-    c = connect.cursor()
+    unix_socket = '/cloudsql/{}'.format(db_connection_name)
+    c = pymysql.connect(user=db_user, password=db_password,
+                              unix_socket=unix_socket, db=db_name)
+    #connect = sqlite3.connect('sentiment_yahoo.db')
+    c = c.cursor()
     c.execute(""" CREATE TABLE IF NOT EXISTS twits( 
                 message_id integer,
                 message text,
@@ -58,9 +66,11 @@ def StockTwits(stocks):
             else: sentiment = rj['messages'][i]['entities']['sentiment'].get('basic')
             time = rj['messages'][i]['created_at']
             stock_code = rj['symbol']['symbol']
-            #list.append([message_ID, message, sentiment, time, stock_code])
-            connect = sqlite3.connect('sentiment_yahoo.db')
-            c = connect.cursor()
+
+            unix_socket = '/cloudsql/{}'.format(db_connection_name)
+            c = pymysql.connect(user=db_user, password=db_password,
+                              unix_socket=unix_socket, db=db_name)
+            c = c.cursor()
             c.execute("INSERT OR IGNORE INTO twits VALUES (:message_id, :message, :sentiment, :time, :stock_code)",
                 { 
                 'message_id' : message_ID,
@@ -68,11 +78,9 @@ def StockTwits(stocks):
                 'sentiment': sentiment,
                 'time': time,
                 'stock_code': stock_code,})
-            connect.commit()
-            connect.close()
-        #df = pd.DataFrame(list, columns=['Message_ID','Message','Sentiment', 'Time', 'Stock'])
-        #df.set_index('Time', inplace=True)
-        #df.to_csv(root + "/data.csv", mode='a+',header=False) #,header=False
+            c.commit()
+            c.close()
+
     return  
 
 def yahoo_data(stocks):
@@ -87,41 +95,39 @@ def yahoo_data(stocks):
         OCHL['ID'] = OCHL['Stock'] +" "+ OCHL['Datetime'].astype(str)
         OCHL.rename(columns={'Adj Close': 'Adj_Close'}, inplace=True)
         OCHL.set_index('ID', inplace=True)
-        #df.set_index('Datetime', inplace=True)
-        #df['Stock'] = tick
-        #df.to_csv(root +"/yahoo.csv", mode='a+', header=False) #,header=False
-        connect = sqlite3.connect('sentiment_yahoo.db')
-        OCHL.to_sql('TempTable',if_exists='replace', con=connect)
-        cur = connect.cursor()
+
+        unix_socket = '/cloudsql/{}'.format(db_connection_name)
+        c = pymysql.connect(user=db_user, password=db_password,
+                              unix_socket=unix_socket, db=db_name)
+        OCHL.to_sql('TempTable',if_exists='replace', con=c)
+        cur = c.cursor()
         cur.execute("INSERT OR IGNORE INTO yahoo_data SELECT * FROM TempTable")
-        connect.commit()
-        connect.close()
+        c.commit()
+        c.close()
 
 
 stocks = ['AAPL', 'MSFT', 'V', 'INTC', 'MA', 'NVDA', 'CSCO', 'ADBE', 'PYPL', 'CRM']
 run = 0
 
+@app.route('/')
 while True:
     Create()    
     StockTwits(stocks)
     yahoo_data(stocks)
     run += 1
-    #df = pd.read_csv(root+ "/data.csv").drop_duplicates()
-    #df2 = pd.read_csv(root+"/yahoo.csv").drop_duplicates()
-    #df.set_index('Time', inplace=True)
-    #df2.set_index('Datetime', inplace=True)
-    #df.to_csv(root+ "/data.csv")
-    #df2.to_csv(root+ "/yahoo.csv")
-    connect = sqlite3.connect('sentiment_yahoo.db')
+
+    unix_socket = '/cloudsql/{}'.format(db_connection_name)
+    c = pymysql.connect(user=db_user, password=db_password,
+                              unix_socket=unix_socket, db=db_name)
 
     # Load the data into a DataFrame
-    twits = pd.read_sql_query("SELECT * from twits", connect)
-    yahoo = pd.read_sql_query("SELECT * from yahoo_data", connect)
-    connect.close()
+    twits = pd.read_sql_query("SELECT * from twits", c)
+    yahoo = pd.read_sql_query("SELECT * from yahoo_data", c)
+    c.close()
     count = len(twits.index)
     count2 = len(yahoo.index)
-    print('This code ran {} times and the dataset currently has {} lines of Tweets, {} lines of OCHL data' .format(run,count, count2) )
+    print('This code ran {} times and the dataset currently has {} lines of Tweets, {} lines of OCHL data' .format(run,count, count2))
     time.sleep(240)
 
-if __name__ == "__main__":
-    application()
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=8080, debug=True)
