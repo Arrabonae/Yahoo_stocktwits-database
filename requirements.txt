@@ -1,6 +1,6 @@
 pandas==0.25.3
 numpy==1.22.0
-requests==2.22.0
+requests==2.31.0
 json==2.0.9
 sqlite==3.32.3
 pandas_datareader==0.8.1
